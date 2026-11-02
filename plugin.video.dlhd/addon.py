@@ -41,7 +41,6 @@ ICON = addon.getAddonInfo('icon')
 
 SEED_BASEURL = 'https://dlive.sx/'
 
-
 def log(msg):
     logpath = xbmcvfs.translatePath('special://logpath/')
     filename = 'dlhd.log'
@@ -63,14 +62,12 @@ def log(msg):
         except:
             pass
 
-
 def normalize_origin(url):
     try:
         u = urlparse(url)
         return f'{u.scheme}://{u.netloc}/'
     except:
         return SEED_BASEURL
-
 
 def resolve_active_baseurl(seed):
     try:
@@ -83,7 +80,6 @@ def resolve_active_baseurl(seed):
         log(f'Active base resolve failed, using seed. Error: {e}')
         return normalize_origin(seed)
 
-
 def get_active_base():
     base = addon.getSetting('active_baseurl')
     if not base:
@@ -93,21 +89,17 @@ def get_active_base():
         base += '/'
     return base
 
-
 def set_active_base(new_base: str):
     if not new_base.endswith('/'):
         new_base += '/'
     addon.setSetting('active_baseurl', new_base)
 
-
 def abs_url(path: str) -> str:
     return urljoin(get_active_base(), path.lstrip('/'))
-
 
 def _sched_headers():
     base = get_active_base()
     return {'User-Agent': UA, 'Referer': base, 'Origin': base}
-
 
 def get_local_time(utc_time_str):
     try:
@@ -126,10 +118,8 @@ def get_local_time(utc_time_str):
         log(f"Failed to convert time: {e}")
         return utc_time_str
 
-
 def build_url(query):
     return addon_url + '?' + urlencode(query)
-
 
 def addDir(title, dir_url, is_folder=True):
     li = xbmcgui.ListItem(title)
@@ -147,17 +137,14 @@ def addDir(title, dir_url, is_folder=True):
     li.setProperty("IsPlayable", 'false' if is_folder else 'true')
     xbmcplugin.addDirectoryItem(handle=addon_handle, url=dir_url, listitem=li, isFolder=is_folder)
 
-
 def closeDir():
     xbmcplugin.endOfDirectory(addon_handle)
-
 
 def getKodiversion():
     try:
         return int(xbmc.getInfoLabel("System.BuildVersion")[:2])
     except:
         return 18
-
 
 def Main_Menu():
     menu = [
@@ -171,7 +158,6 @@ def Main_Menu():
     for m in menu:
         addDir(m[0], build_url({'mode': 'menu', 'serv_type': m[1]}))
     closeDir()
-
 
 def getCategTrans():
     schedule_url = abs_url('index.php')
@@ -209,7 +195,6 @@ def getCategTrans():
         log(f'index parse fail: url={schedule_url} err={e}')
         return []
 
-
 def Menu_Trans():
     categs = getCategTrans()
     if not categs:
@@ -218,13 +203,11 @@ def Menu_Trans():
         addDir(categ_name, build_url({'mode': 'showChannels', 'trType': categ_name}))
     closeDir()
 
-
 def ShowChannels(categ, channels_list):
     for item in channels_list:
         title = item.get('title')
         addDir(title, build_url({'mode': 'trList', 'trType': categ, 'channels': json.dumps(item.get('channels'))}), True)
     closeDir()
-
 
 def getTransData(categ):
     try:
@@ -276,7 +259,6 @@ def getTransData(categ):
         log(f'getTransData error for categ={categ}: {e}')
         return []
 
-
 def TransList(categ, channels):
     for channel in channels:
         channel_title = html.unescape(channel.get('channel_name'))
@@ -285,7 +267,6 @@ def TransList(categ, channels):
             continue
         addDir(channel_title, build_url({'mode': 'trLinks', 'trData': json.dumps({'channels': [{'channel_name': channel_title, 'channel_id': channel_id}]})}), False)
     closeDir()
-
 
 def _candidate_stream_urls(cid):
     cid = str(cid or '').strip()
@@ -314,7 +295,6 @@ def _candidate_stream_urls(cid):
 
     return urls
 
-
 def getSource(trData):
     try:
         data = json.loads(unquote(trData))
@@ -323,24 +303,28 @@ def getSource(trData):
             cid = str(channels_data[0].get('channel_id', '')).strip()
             if not cid:
                 return
-            for stream_url in _candidate_stream_urls(cid):
+
+            candidates = _candidate_stream_urls(cid)
+            if not candidates:
+                return
+
+            for stream_url in candidates:
                 xbmcplugin.setContent(addon_handle, 'videos')
                 try:
                     PlayStream(stream_url)
                     return
                 except Exception as e:
                     log(f'getSource candidate failed {stream_url}: {e}')
+
             log(f'getSource failed for cid={cid}: no usable play URL candidates')
     except Exception as e:
         log(f'getSource failed: {e}')
-
 
 def list_gen():
     chData = channels()
     for c in chData:
         addDir(c[1], build_url({'mode': 'play', 'url': abs_url(c[0])}), False)
     closeDir()
-
 
 def channels():
     url = abs_url('24-7-channels.php')
@@ -381,11 +365,32 @@ def channels():
 
     return items
 
+def _bad_source_url(url):
+    if not url:
+        return True
+    lower = url.lower()
+    bad_tokens = [
+        'histats.com',
+        'googletagmanager.com',
+        'doubleclick.net',
+        'googleads',
+        'adservice',
+        'ads.',
+        'analytics',
+        'tracking',
+        'pixel',
+        'beacon',
+    ]
+    for token in bad_tokens:
+        if token in lower:
+            return True
+    return False
 
 def PlayStream(link):
     try:
         base = get_active_base()
         session = requests.Session()
+        m3u8_playlist_url = None
 
         def _origin(u):
             try:
@@ -406,13 +411,13 @@ def PlayStream(link):
             r.raise_for_status()
             return r.text, r.url
 
-        def _link_candidates(url):
-            url = str(url or '').strip()
-            if not url:
-                return []
-            parsed = urlparse(url)
+        candidates = []
+        clean_link = str(link or '').strip()
+        if clean_link:
+            parsed = urlparse(clean_link)
             path_lower = parsed.path.lower()
             cid = None
+
             if 'watch.php' in path_lower or 'stream-' in path_lower:
                 m = re.search(r'stream-(\d+)\.php', path_lower)
                 if m:
@@ -421,35 +426,50 @@ def PlayStream(link):
                     q = parse_qs(parsed.query)
                     if q.get('id'):
                         cid = q['id'][0]
-            if cid:
-                return _candidate_stream_urls(cid)
-            return [url]
 
-        candidates = _link_candidates(link)
-        html1 = ''
-        source_url = ''
+            if cid:
+                candidates = _candidate_stream_urls(cid)
+            else:
+                candidates = [clean_link]
+        else:
+            candidates = []
+
+        if not candidates:
+            raise RuntimeError(f'No candidate streaming URL available for {link}')
+
+        source_url = None
         for candidate in candidates:
             try:
-                html1, url1 = _fetch(candidate, ref=base, note='entry')
-                matches = re.findall(r'''(?:src|file)\s*[:=]\s*["']([^"']+)["']''', html1, re.IGNORECASE)
+                html1, _ = _fetch(candidate, ref=base, note='entry')
+                js_src_matches = re.findall(r'''(?:src|file)\s*[:=]\s*["']([^"']+)["']''', html1, re.IGNORECASE)
                 iframe_matches = re.findall(r'iframe[^>]+src=["\']([^"\']+)["\']', html1, re.IGNORECASE)
-                matches = (matches or iframe_matches)
-                if matches:
-                    source_url = matches[0]
+                all_matches = js_src_matches + iframe_matches
+                for maybe in all_matches:
+                    if not maybe:
+                        continue
+                    if maybe.startswith('//'):
+                        maybe = 'https:' + maybe
+                    if _bad_source_url(maybe):
+                        continue
+                    if 'm3u8' in maybe.lower() or '.php' in maybe.lower() or 'player' in maybe.lower() or 'stream' in maybe.lower() or 'embed' in maybe.lower():
+                        source_url = maybe
+                        break
+                if source_url:
                     break
             except Exception as e:
                 log(f'[PlayStream] candidate {candidate} failed: {e}')
                 continue
 
         if not source_url:
-            raise RuntimeError(f'Unable to find iframe/source URL from {link}')
+            raise RuntimeError(f'Unable to find a valid player source URL from {link}')
+
+        log(f'source_url: {source_url}')
 
         try:
-            source_resp, srurl = _fetch(source_url, ref=base, note='source response')
+            source_resp, _ = _fetch(source_url, ref=base, note='source response')
         except Exception as e:
             log(f'Error fetching source page {source_url}: {e}')
-            source_resp = ''
-            srurl = source_url
+            raise
 
         econfig = None
         for pat in [
@@ -463,7 +483,6 @@ def PlayStream(link):
                 econfig = m.group(1)
                 break
 
-        m3u8_playlist_url = None
         if econfig:
             try:
                 outer = base64.b64decode(econfig).decode("utf-8")
@@ -600,7 +619,6 @@ def Search_Events():
         log(f"Search_Events (fast) error: {e}")
         xbmcgui.Dialog().ok("Search", "Search failed. Check log.")
 
-
 def Search_Channels():
     keyboard = xbmcgui.Dialog().input("Enter channel name", type=xbmcgui.INPUT_ALPHANUM)
     if not keyboard or keyboard.strip() == '':
@@ -661,13 +679,11 @@ def Search_Channels():
         log(f"Search_Channels (fast) error: {e}")
         xbmcgui.Dialog().ok("Search", "Search failed. Check log.")
 
-
 def refresh_active_base():
     new_base = resolve_active_baseurl(SEED_BASEURL)
     set_active_base(new_base)
     xbmcgui.Dialog().ok("DLHD", f"Active domain set to:\n{new_base}")
     xbmc.executebuiltin('Container.Refresh')
-
 
 kodiversion = getKodiversion()
 mode = params.get('mode', None)
