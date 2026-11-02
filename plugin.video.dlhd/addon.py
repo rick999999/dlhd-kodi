@@ -276,8 +276,7 @@ def _extract_m3u8(page):
     patterns = [
         r'"(https?://[^"\']+\.m3u8(?:\?[^"\']+)?)"',
         r"'(https?://[^\"\']+\.m3u8(?:\?[^\"\']+)?)'",
-        r'(https?://[^\s"\'>]+\.m3u8(?:\?[^
-\s"\'>]+)?)',
+        r'(https?://[^\s"\'>]+\.m3u8(?:\?[^"\'\s>]+)?)',
     ]
     for pat in patterns:
         m = re.search(pat, page or '', re.I | re.S)
