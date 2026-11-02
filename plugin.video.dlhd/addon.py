@@ -3,6 +3,7 @@ import re
 import json
 import os
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, quote_plus, parse_qs
@@ -285,11 +286,40 @@ def _extract_m3u8(page):
     return None
 
 
+def _fetch_playlist_token(session, slug, source_host='https://dembed.st'):
+    if not slug:
+        return None
+    token_url = f'https://edge.wedd48c.top/api/playlist-token?slug={slug}'
+    headers = {
+        'User-Agent': UA,
+        'Accept': '*/*',
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Origin': source_host,
+        'Referer': f'{source_host}/',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'cross-site',
+    }
+    try:
+        r = session.get(token_url, headers=headers, timeout=15)
+        r.raise_for_status()
+        payload = r.json()
+        return payload.get('token')
+    except Exception as e:
+        log(f'playlist-token fetch failed slug={slug}: {e}')
+        return None
+
+
 def PlayStream(link):
     try:
         session = requests.Session()
         base = get_active_base()
         formatted = link
+        m3u8_playlist_url = None
+
         if 'watch.php?id=' in formatted:
             parsed = urlparse(formatted)
             q = dict(parse_qsl(parsed.query))
@@ -306,7 +336,27 @@ def PlayStream(link):
         log(f'source_url: {source_url}')
         page2, _ = _fetch(session, source_url, referer=base)
 
-        m3u8_playlist_url = _extract_m3u8(page2)
+        source_slug = None
+        slug_match = re.search(r'/premiumtv/daddy\.php\?id=(\d+)', source_url, re.I)
+        if slug_match:
+            source_slug = f'premium{slug_match.group(1)}'
+        else:
+            slug_match = re.search(r'playlist-token\?slug=([^"&]+)', page2, re.I)
+            if slug_match:
+                source_slug = slug_match.group(1)
+            else:
+                slug_match = re.search(r'premium\d+', page2, re.I)
+                if slug_match:
+                    source_slug = slug_match.group(0)
+
+        if source_slug:
+            token = _fetch_playlist_token(session, source_slug, source_host='https://dembed.st')
+            if token:
+                m3u8_playlist_url = f'https://edge.wedd48c.top/{source_slug}/index.m3u8?t={token}&_={int(time.time() * 1000)}'
+                log(f'm3u8_playlist_url via token: {m3u8_playlist_url}')
+
+        if not m3u8_playlist_url:
+            m3u8_playlist_url = _extract_m3u8(page2)
         if not m3u8_playlist_url:
             m3u8_playlist_url = _extract_m3u8(html1)
         if not m3u8_playlist_url:
