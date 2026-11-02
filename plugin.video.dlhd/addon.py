@@ -268,6 +268,23 @@ def TransList(categ, channels):
         addDir(channel_title, build_url({'mode': 'trLinks', 'trData': json.dumps({'channels': [{'channel_name': channel_title, 'channel_id': channel_id}]})}), False)
     closeDir()
 
+def _candidate_stream_urls(cid):
+    cid = str(cid or '').strip()
+    if not cid:
+        return []
+    names = []
+    if '%7C' in cid or '|' in cid:
+        names.append(f'watchs2watch.php?id={quote_plus(cid)}')
+    for path in [
+        f'stream/stream-{cid}.php',
+        f'cast/stream-{cid}.php',
+        f'watch.php?id={quote_plus(cid)}',
+        f'watchs2watch.php?id={quote_plus(cid)}',
+    ]:
+        if path not in names:
+            names.append(path)
+    return [abs_url(p) for p in names]
+
 def getSource(trData):
     try:
         data = json.loads(unquote(trData))
@@ -276,13 +293,14 @@ def getSource(trData):
             cid = str(channels_data[0].get('channel_id', '')).strip()
             if not cid:
                 return
-            if '%7C' in cid or '|' in cid:
-                url_stream = abs_url('watchs2watch.php?id=' + cid)
-            else:
-                url_stream = abs_url('cast/stream-' + cid + '.php')
-                # url_stream = abs_url('stream/stream-' + cid + '.php')
-            xbmcplugin.setContent(addon_handle, 'videos')
-            PlayStream(url_stream)
+            for stream_url in _candidate_stream_urls(cid):
+                xbmcplugin.setContent(addon_handle, 'videos')
+                try:
+                    PlayStream(stream_url)
+                    return
+                except Exception as e:
+                    log(f'getSource candidate failed {stream_url}: {e}')
+            log(f'getSource failed for cid={cid}: no usable play URL candidates')
     except Exception as e:
         log(f'getSource failed: {e}')
 
@@ -347,62 +365,119 @@ def PlayStream(link):
             headers = {
                 'User-Agent': UA,
                 'Referer': base,
-                #'Origin': _origin(base),
             }
             if ref:
                 headers['Referer'] = ref
-                #headers['Origin'] = _origin(ref)
             log(f'[PlayStream] GET {u}  (ref={headers.get("Referer")}) {note}')
             r = session.get(u, headers=headers, timeout=10)
             r.raise_for_status()
             return r.text, r.url
 
-        def _format_link(url):
-            if "watch.php?id=" in url:
-                parsed_url = urlparse(url)
-                query_params = parse_qs(parsed_url.query)
-                cid = query_params.get('id')[0]
-                new_url = abs_url('cast/stream-' + cid + '.php')
-                # new_url = abs_url('stream/stream-' + cid + '.php')
-                return new_url
-            else:
-                return url
+        def _link_candidates(url):
+            url = str(url or '').strip()
+            if not url:
+                return []
+            parsed = urlparse(url)
+            path_lower = parsed.path.lower()
+            cid = None
+            if 'watch.php' in path_lower or 'stream-' in path_lower:
+                m = re.search(r'stream-(\d+)\.php', path_lower)
+                if m:
+                    cid = m.group(1)
+                else:
+                    q = parse_qs(parsed.query)
+                    if q.get('id'):
+                        cid = q['id'][0]
+            if cid:
+                return _candidate_stream_urls(cid)
+            return [url]
 
-        formatted_link = _format_link(link)
-        html1, url1 = _fetch(formatted_link, ref=base, note='entry')
+        candidates = _link_candidates(link)
+        html1 = ''
+        source_url = ''
+        for candidate in candidates:
+            try:
+                html1, url1 = _fetch(candidate, ref=base, note='entry')
+                matches = re.findall(r'''(?:src|file)\s*[:=]\s*["']([^"']+)["']''', html1, re.IGNORECASE)
+                iframe_matches = re.findall(r'iframe[^>]+src=["\']([^"\']+)["\']', html1, re.IGNORECASE)
+                matches = (matches or iframe_matches)
+                if matches:
+                    source_url = matches[0]
+                    break
+            except Exception as e:
+                log(f'[PlayStream] candidate {candidate} failed: {e}')
+                continue
 
-        try:
-            matches = re.compile("iframe src=\"(.*)\" width").findall(html1)
-            source_url = matches[0]
-            log(f"source_url: {source_url}")
-        except Exception as e:
-            log(f"Error: {e}")
+        if not source_url:
+            raise RuntimeError(f'Unable to find iframe/source URL from {link}')
 
         try:
             source_resp, srurl = _fetch(source_url, ref=base, note='source response')
-            
-            econfig = re.search(r"window\._econfig\s*=\s*['\"]([^'\"]+)['\"]", source_resp).group(1)
-            outer = base64.b64decode(econfig).decode("utf-8")
-            q = len(outer) // 4
-            chunks = [outer[i:i+q] for i in range(0, q*4, q)]
-            reordered = [None] * 4
-
-            for source_index, destination_index in enumerate([2, 0, 3, 1]):
-                c = chunks[source_index]
-                c = c[:3] + c[4:]
-                reordered[destination_index] = base64.b64decode(c).decode("utf-8")
-
-            decoded_config = json.loads(base64.b64decode("".join(reordered)).decode("utf-8"))
-            m3u8_playlist_url = decoded_config.get("stream_url_nop2p") or decoded_config.get("stream_url")
-            log(f"m3u8_playlist_url: {m3u8_playlist_url}")
-
         except Exception as e:
-            log(f"Error: {e}")
+            log(f'Error fetching source page {source_url}: {e}')
+            source_resp = ''
+            srurl = source_url
+
+        econfig = None
+        for pat in [
+            r"window\._econfig\s*=\s*['\"]([^'\"]+)['\"]",
+            r"_econfig\s*=\s*['\"]([^'\"]+)['\"]",
+            r"window\._config\s*=\s*['\"]([^'\"]+)['\"]",
+            r"var\s+econfig\s*=\s*['\"]([^'\"]+)['\"]",
+        ]:
+            m = re.search(pat, source_resp, re.IGNORECASE)
+            if m:
+                econfig = m.group(1)
+                break
+
+        m3u8_playlist_url = None
+        if econfig:
+            try:
+                outer = base64.b64decode(econfig).decode("utf-8")
+                q = len(outer) // 4
+                chunks = [outer[i:i+q] for i in range(0, q*4, q)]
+                reordered = [None] * 4
+                for source_index, destination_index in enumerate([2, 0, 3, 1]):
+                    c = chunks[source_index]
+                    c = c[:3] + c[4:]
+                    reordered[destination_index] = base64.b64decode(c).decode("utf-8")
+                decoded_config = json.loads(base64.b64decode("".join(reordered)).decode("utf-8"))
+                m3u8_playlist_url = decoded_config.get("stream_url_nop2p") or decoded_config.get("stream_url")
+                log(f"m3u8_playlist_url: {m3u8_playlist_url}")
+            except Exception as e:
+                log(f'Error decoding _econfig: {e}')
+
+        if not m3u8_playlist_url:
+            for pat in [
+                r'"stream_url(?:_nop2p)?"\s*:\s*"([^"]+)"',
+                r"'stream_url(?:_nop2p)?'\s*:\s*'([^']+)'",
+                r'"(?:file|src)"\s*:\s*"([^"]+\.m3u8[^\"]*)"',
+                r"'(?:file|src)'\s*:\s*'([^']+\.m3u8[^']*)'",
+            ]:
+                m = re.search(pat, source_resp, re.IGNORECASE)
+                if m:
+                    m3u8_playlist_url = m.group(1)
+                    break
+
+        if not m3u8_playlist_url:
+            for pat in [
+                r'https?://[^\"\'\s>]+\.m3u8[^\"\'\s>]*',
+                r'//[^\"\'\s>]+\.m3u8[^\"\'\s>]*',
+            ]:
+                m = re.search(pat, source_resp, re.IGNORECASE)
+                if m:
+                    m3u8_playlist_url = m.group(0)
+                    if not m3u8_playlist_url.startswith('http') and m3u8_playlist_url.startswith('//'):
+                        m3u8_playlist_url = 'https:' + m3u8_playlist_url
+                    break
+
+        if not m3u8_playlist_url:
+            raise RuntimeError(f'No HLS playlist found in page after {source_url}')
 
         host_raw = _origin(source_url)
         header_dict = {
-            'Referer': f'{host_raw}/',
-            'Origin': host_raw,
+            'Referer': f'{host_raw}/' if host_raw else base,
+            'Origin': host_raw if host_raw else base,
             'Connection': 'Keep-Alive',
             'User-Agent': UA,
         }
@@ -423,6 +498,7 @@ def PlayStream(link):
     except Exception as e:
         import traceback
         log(f"[PlayStream] Exception: {e}\n{traceback.format_exc()}")
+
 
 def Search_Events():
     keyboard = xbmcgui.Dialog().input("Enter search term", type=xbmcgui.INPUT_ALPHANUM)
