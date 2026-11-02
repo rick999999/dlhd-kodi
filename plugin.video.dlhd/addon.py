@@ -41,6 +41,7 @@ ICON = addon.getAddonInfo('icon')
 
 SEED_BASEURL = 'https://dlive.sx/'
 
+
 def log(msg):
     logpath = xbmcvfs.translatePath('special://logpath/')
     filename = 'dlhd.log'
@@ -62,12 +63,14 @@ def log(msg):
         except:
             pass
 
+
 def normalize_origin(url):
     try:
         u = urlparse(url)
         return f'{u.scheme}://{u.netloc}/'
     except:
         return SEED_BASEURL
+
 
 def resolve_active_baseurl(seed):
     try:
@@ -80,6 +83,7 @@ def resolve_active_baseurl(seed):
         log(f'Active base resolve failed, using seed. Error: {e}')
         return normalize_origin(seed)
 
+
 def get_active_base():
     base = addon.getSetting('active_baseurl')
     if not base:
@@ -89,17 +93,21 @@ def get_active_base():
         base += '/'
     return base
 
+
 def set_active_base(new_base: str):
     if not new_base.endswith('/'):
         new_base += '/'
     addon.setSetting('active_baseurl', new_base)
 
+
 def abs_url(path: str) -> str:
     return urljoin(get_active_base(), path.lstrip('/'))
+
 
 def _sched_headers():
     base = get_active_base()
     return {'User-Agent': UA, 'Referer': base, 'Origin': base}
+
 
 def get_local_time(utc_time_str):
     try:
@@ -118,8 +126,10 @@ def get_local_time(utc_time_str):
         log(f"Failed to convert time: {e}")
         return utc_time_str
 
+
 def build_url(query):
     return addon_url + '?' + urlencode(query)
+
 
 def addDir(title, dir_url, is_folder=True):
     li = xbmcgui.ListItem(title)
@@ -137,14 +147,17 @@ def addDir(title, dir_url, is_folder=True):
     li.setProperty("IsPlayable", 'false' if is_folder else 'true')
     xbmcplugin.addDirectoryItem(handle=addon_handle, url=dir_url, listitem=li, isFolder=is_folder)
 
+
 def closeDir():
     xbmcplugin.endOfDirectory(addon_handle)
+
 
 def getKodiversion():
     try:
         return int(xbmc.getInfoLabel("System.BuildVersion")[:2])
     except:
         return 18
+
 
 def Main_Menu():
     menu = [
@@ -158,6 +171,7 @@ def Main_Menu():
     for m in menu:
         addDir(m[0], build_url({'mode': 'menu', 'serv_type': m[1]}))
     closeDir()
+
 
 def getCategTrans():
     schedule_url = abs_url('index.php')
@@ -195,6 +209,7 @@ def getCategTrans():
         log(f'index parse fail: url={schedule_url} err={e}')
         return []
 
+
 def Menu_Trans():
     categs = getCategTrans()
     if not categs:
@@ -203,11 +218,13 @@ def Menu_Trans():
         addDir(categ_name, build_url({'mode': 'showChannels', 'trType': categ_name}))
     closeDir()
 
+
 def ShowChannels(categ, channels_list):
     for item in channels_list:
         title = item.get('title')
         addDir(title, build_url({'mode': 'trList', 'trType': categ, 'channels': json.dumps(item.get('channels'))}), True)
     closeDir()
+
 
 def getTransData(categ):
     try:
@@ -259,6 +276,7 @@ def getTransData(categ):
         log(f'getTransData error for categ={categ}: {e}')
         return []
 
+
 def TransList(categ, channels):
     for channel in channels:
         channel_title = html.unescape(channel.get('channel_name'))
@@ -268,22 +286,34 @@ def TransList(categ, channels):
         addDir(channel_title, build_url({'mode': 'trLinks', 'trData': json.dumps({'channels': [{'channel_name': channel_title, 'channel_id': channel_id}]})}), False)
     closeDir()
 
+
 def _candidate_stream_urls(cid):
     cid = str(cid or '').strip()
     if not cid:
         return []
-    names = []
-    if '%7C' in cid or '|' in cid:
-        names.append(f'watchs2watch.php?id={quote_plus(cid)}')
-    for path in [
-        f'stream/stream-{cid}.php',
+
+    path_variants = [
+        f'hub/stream-{cid}.php',
         f'cast/stream-{cid}.php',
+        f'watch/stream-{cid}.php',
+        f'plus/stream-{cid}.php',
+        f'casting/stream-{cid}.php',
+        f'player/stream-{cid}.php',
+        f'stream/stream-{cid}.php',
         f'watch.php?id={quote_plus(cid)}',
         f'watchs2watch.php?id={quote_plus(cid)}',
-    ]:
-        if path not in names:
-            names.append(path)
-    return [abs_url(p) for p in names]
+    ]
+
+    seen = set()
+    urls = []
+    for p in path_variants:
+        if p in seen:
+            continue
+        seen.add(p)
+        urls.append(abs_url(p))
+
+    return urls
+
 
 def getSource(trData):
     try:
@@ -304,11 +334,13 @@ def getSource(trData):
     except Exception as e:
         log(f'getSource failed: {e}')
 
+
 def list_gen():
     chData = channels()
     for c in chData:
         addDir(c[1], build_url({'mode': 'play', 'url': abs_url(c[0])}), False)
     closeDir()
+
 
 def channels():
     url = abs_url('24-7-channels.php')
@@ -348,6 +380,7 @@ def channels():
         log("[DADDYLIVE] channels(): Site may have changed.")
 
     return items
+
 
 def PlayStream(link):
     try:
@@ -567,6 +600,7 @@ def Search_Events():
         log(f"Search_Events (fast) error: {e}")
         xbmcgui.Dialog().ok("Search", "Search failed. Check log.")
 
+
 def Search_Channels():
     keyboard = xbmcgui.Dialog().input("Enter channel name", type=xbmcgui.INPUT_ALPHANUM)
     if not keyboard or keyboard.strip() == '':
@@ -627,11 +661,13 @@ def Search_Channels():
         log(f"Search_Channels (fast) error: {e}")
         xbmcgui.Dialog().ok("Search", "Search failed. Check log.")
 
+
 def refresh_active_base():
     new_base = resolve_active_baseurl(SEED_BASEURL)
     set_active_base(new_base)
     xbmcgui.Dialog().ok("DLHD", f"Active domain set to:\n{new_base}")
     xbmc.executebuiltin('Container.Refresh')
+
 
 kodiversion = getKodiversion()
 mode = params.get('mode', None)
