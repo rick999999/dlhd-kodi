@@ -225,6 +225,34 @@ def _origin(url):
         return ''
 
 
+def _candidate_stream_urls(cid):
+    cid = str(cid or '').strip()
+    if not cid:
+        return []
+
+    path_variants = [
+        f'stream/stream-{cid}.php',
+        f'watch/stream-{cid}.php',
+        f'hub/stream-{cid}.php',
+        f'plus/stream-{cid}.php',
+        f'casting/stream-{cid}.php',
+        f'player/stream-{cid}.php',
+        f'cast/stream-{cid}.php',
+        f'watch.php?id={quote_plus(cid)}',
+        f'watchs2watch.php?id={quote_plus(cid)}',
+    ]
+
+    urls = []
+    seen = set()
+    for p in path_variants:
+        full_url = abs_url(p)
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+        urls.append(full_url)
+    return urls
+
+
 def _fetch(session, url, referer=None, timeout=15):
     if not url:
         raise RuntimeError('Empty URL')
@@ -248,7 +276,8 @@ def _extract_m3u8(page):
     patterns = [
         r'"(https?://[^"\']+\.m3u8(?:\?[^"\']+)?)"',
         r"'(https?://[^\"\']+\.m3u8(?:\?[^\"\']+)?)'",
-        r'(https?://[^\s"\'>]+\.m3u8(?:\?[^\s"\'>]+)?)',
+        r'(https?://[^\s"\'>]+\.m3u8(?:\?[^
+\s"\'>]+)?)',
     ]
     for pat in patterns:
         m = re.search(pat, page or '', re.I | re.S)
@@ -267,7 +296,7 @@ def PlayStream(link):
             q = dict(parse_qsl(parsed.query))
             cid = q.get('id')
             if cid:
-                formatted = abs_url('cast/stream-' + cid + '.php')
+                formatted = f'https://thedaddy.pk/stream/stream-{cid}.php'
                 log(f'[PlayStream] normalized input watch.php -> {formatted}')
 
         html1, _ = _fetch(session, formatted, referer=base)
@@ -394,8 +423,12 @@ def getSource(trData):
         cid = channels[0].get('channel_id')
         if not cid:
             return
-        stream_url = abs_url('cast/stream-' + str(cid) + '.php')
-        PlayStream(stream_url)
+        for stream_url in _candidate_stream_urls(cid):
+            try:
+                PlayStream(stream_url)
+                return
+            except Exception as e:
+                log(f'getSource candidate failed {stream_url}: {e}')
     except Exception as e:
         log(f'getSource fail: {e}')
 
