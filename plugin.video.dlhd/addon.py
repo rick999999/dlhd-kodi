@@ -273,14 +273,17 @@ def _candidate_stream_urls(cid):
     if not cid:
         return []
 
+    # thedaddy.pk pages now expose multiple stream entry points.
+    # Browser tests show /stream/stream-<id>.php is the active path,
+    # while /cast/stream-<id>.php is often blocked/403.
     path_variants = [
-        f'hub/stream-{cid}.php',
-        f'cast/stream-{cid}.php',
+        f'stream/stream-{cid}.php',
         f'watch/stream-{cid}.php',
+        f'hub/stream-{cid}.php',
         f'plus/stream-{cid}.php',
         f'casting/stream-{cid}.php',
         f'player/stream-{cid}.php',
-        f'stream/stream-{cid}.php',
+        f'cast/stream-{cid}.php',
         f'watch.php?id={quote_plus(cid)}',
         f'watchs2watch.php?id={quote_plus(cid)}',
     ]
